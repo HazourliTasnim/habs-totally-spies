@@ -77,6 +77,31 @@ def ecg_features(ecg, t):
     return out
 
 
+def gsr_features(gsr, t):
+    """Skin conductance (uS): level, steepest rise and slope, at 10 Hz."""
+    y = sosfiltfilt(_sos(None, 1.0, FS, 2), gsr)[::100]
+    tt = t[::100]
+    out = {}
+    for wname, w in (("base", BASE), ("video", VIDEO)):
+        s = y[_win(tt, w)]
+        out[f"{wname}_scl"] = s.mean()
+        out[f"{wname}_slope"] = np.polyfit(np.arange(len(s)) / 10, s, 1)[0]
+        out[f"{wname}_rise"] = (s - np.minimum.accumulate(s)).max()   # largest rise from a prior trough
+    return out
+
+
+def resp_features(resp, t):
+    y = sosfiltfilt(_sos(0.1, 1.0, FS, 2), resp)[::100]
+    tt = t[::100]
+    out = {}
+    for wname, w in (("base", BASE), ("video", VIDEO)):
+        s = y[_win(tt, w)]
+        out[f"{wname}_amp"] = s.std()
+        pk, _ = find_peaks(s, distance=15, prominence=0.3 * s.std() if s.std() > 0 else None)
+        out[f"{wname}_rate"] = 60 * len(pk) / (w[1] - w[0])
+    return out
+
+
 def trial_features(df, eeg_names, onset):
     """All scalar features (dict) and EEG covariances for one trial."""
     i0, i1 = int((onset + BASE[0] - PAD) * FS), int((onset + VIDEO[1] + PAD) * FS)
@@ -90,6 +115,8 @@ def trial_features(df, eeg_names, onset):
         row.update({f"eeg_{w}_{b}_{ch}": val for ch, val in zip(eeg_names, v)})
     for prefix, feats in (
         ("ecg", ecg_features(seg["ECG"].to_numpy(), t)),
+        ("gsr", gsr_features(seg["GSR"].to_numpy(), t)),
+        ("resp", resp_features(seg["Resp"].to_numpy(), t)),
     ):
         row.update({f"{prefix}_{k}": v for k, v in feats.items()})
     iu = np.triu_indices(len(eeg_names))
