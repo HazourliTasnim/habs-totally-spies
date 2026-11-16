@@ -102,6 +102,34 @@ def resp_features(resp, t):
     return out
 
 
+def eye_features(pupil, gx, gy, t):
+    """Inputs are on the 1 kHz grid with NaN between the native gaze samples.
+
+    The Neon tracker reports no gaps during blinks; blinks show up as brief
+    pupil dips instead, so pupil size uses robust statistics (median, 90th
+    percentile) and the dip fraction serves as a blink proxy.
+    """
+    keep = ~np.isnan(gx)
+    pupil, gx, gy, tt = pupil[keep], gx[keep], gy[keep], t[keep]
+    out = {}
+    for wname, w in (("base", BASE), ("video", VIDEO)):
+        m = _win(tt, w)
+        p, x, y = pupil[m], gx[m], gy[m]
+        if m.sum() < 50 or np.isnan(p).mean() > 0.5:
+            out.update({f"{wname}_{k}": np.nan for k in ("pupil", "pupil_p90", "pupil_slope", "blink",
+                                                         "gaze_sd", "gaze_speed")})
+            continue
+        med = np.nanmedian(p)
+        out[f"{wname}_pupil"] = med
+        out[f"{wname}_pupil_p90"] = np.nanpercentile(p, 90)
+        good = p > med - 0.5
+        out[f"{wname}_pupil_slope"] = np.polyfit(tt[m][good], p[good], 1)[0]
+        out[f"{wname}_blink"] = 1 - good.mean()
+        out[f"{wname}_gaze_sd"] = np.sqrt(np.nanvar(x) + np.nanvar(y))
+        out[f"{wname}_gaze_speed"] = np.nanmedian(np.hypot(np.diff(x), np.diff(y)) / np.diff(tt[m]))
+    return out
+
+
 def trial_features(df, eeg_names, onset):
     """All scalar features (dict) and EEG covariances for one trial."""
     i0, i1 = int((onset + BASE[0] - PAD) * FS), int((onset + VIDEO[1] + PAD) * FS)
@@ -117,8 +145,9 @@ def trial_features(df, eeg_names, onset):
         ("ecg", ecg_features(seg["ECG"].to_numpy(), t)),
         ("gsr", gsr_features(seg["GSR"].to_numpy(), t)),
         ("resp", resp_features(seg["Resp"].to_numpy(), t)),
+        ("eye", eye_features(np.nanmean(seg[["pupildiameter_le", "pupildiameter_ri"]].to_numpy(), axis=1),
+                             seg["gaze_x"].to_numpy(), seg["gaze_y"].to_numpy(), t)),
     ):
         row.update({f"{prefix}_{k}": v for k, v in feats.items()})
     iu = np.triu_indices(len(eeg_names))
     return row, cov[:, iu[0], iu[1]].astype(np.float32)
-
