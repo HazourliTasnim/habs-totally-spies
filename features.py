@@ -54,6 +54,29 @@ def eeg_features(x, t):
     return out, np.stack(covs)
 
 
+def ecg_features(ecg, t):
+    """Heart rate from R peaks; polarity chosen so that R peaks are positive."""
+    y = sosfiltfilt(_sos(5, 30, FS), ecg)
+    if np.abs(np.percentile(y, 0.5)) > np.abs(np.percentile(y, 99.5)):
+        y = -y
+    peaks, _ = find_peaks(y, distance=int(0.33 * FS), height=0.4 * np.percentile(y, 99))
+    out = {}
+    if len(peaks) < 4:
+        return {f"{w}_{k}": np.nan for w in ("base", "video") for k in ("hr", "hr_slope", "sdnn", "rmssd")}
+    pt, ibi = t[peaks[1:]], np.diff(peaks) / FS
+    med = np.median(ibi)
+    ok = (ibi > 0.33) & (ibi < 1.5) & (np.abs(ibi - med) < 0.3 * med)   # 40-180 bpm, no missed/extra beats
+    pt, ibi = pt[ok], ibi[ok]
+    for wname, w in (("base", BASE), ("video", VIDEO)):
+        m = _win(pt, w)
+        hr = 60 / ibi[m]
+        out[f"{wname}_hr"] = hr.mean() if m.sum() else np.nan
+        out[f"{wname}_hr_slope"] = np.polyfit(pt[m], hr, 1)[0] if m.sum() > 2 else np.nan
+        out[f"{wname}_sdnn"] = ibi[m].std() * 1e3 if m.sum() > 2 else np.nan
+        out[f"{wname}_rmssd"] = np.sqrt(np.mean(np.diff(ibi[m]) ** 2)) * 1e3 if m.sum() > 2 else np.nan
+    return out
+
+
 def trial_features(df, eeg_names, onset):
     """All scalar features (dict) and EEG covariances for one trial."""
     i0, i1 = int((onset + BASE[0] - PAD) * FS), int((onset + VIDEO[1] + PAD) * FS)
@@ -65,6 +88,10 @@ def trial_features(df, eeg_names, onset):
     eeg, cov = eeg_features(seg[eeg_names].to_numpy().T, t)
     for (w, b), v in eeg.items():
         row.update({f"eeg_{w}_{b}_{ch}": val for ch, val in zip(eeg_names, v)})
+    for prefix, feats in (
+        ("ecg", ecg_features(seg["ECG"].to_numpy(), t)),
+    ):
+        row.update({f"{prefix}_{k}": v for k, v in feats.items()})
     iu = np.triu_indices(len(eeg_names))
     return row, cov[:, iu[0], iu[1]].astype(np.float32)
 
