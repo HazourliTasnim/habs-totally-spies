@@ -127,3 +127,39 @@ def video_deviation(df, y, train):
         out[~train] = y[~train] - (S[~train] - y[~train]) / (N[~train] - 1)    # leave-one-out over everyone
     out[~np.isfinite(out)] = np.nan
     return out
+
+
+# -------------------------------------------------------------- experiments
+def e1_fingerprint(df, X, cols, n_pairs=200_000):
+    """AUC: are cross-person feature correlations higher for the same video?"""
+    pid, vid = df.participant_id.to_numpy(), df.video.to_numpy()
+    by_vid = pd.Series(np.arange(len(df))).groupby(vid).apply(np.array)
+    by_vid = by_vid[by_vid.map(len) > 1]
+    i = RNG.integers(0, len(by_vid), n_pairs)
+    a = np.array([RNG.choice(by_vid.iloc[k]) for k in i])
+    b = np.array([RNG.choice(by_vid.iloc[k]) for k in i])
+    c = RNG.integers(0, len(df), n_pairs)
+    ok = (pid[a] != pid[b]) & (pid[a] != pid[c]) & (vid[a] != vid[c])
+    a, b, c = a[ok], b[ok], c[ok]
+    rows = []
+    for name, mods in SETS.items():
+        Z = X[:, col_index(cols, mods)]
+        Z = (Z - Z.mean(1, keepdims=True)) / (Z.std(1, keepdims=True) + 1e-9)
+        same, diff = (Z[a] * Z[b]).mean(1), (Z[a] * Z[c]).mean(1)
+        auc = roc_auc_score(np.r_[np.ones(len(same)), np.zeros(len(diff))], np.r_[same, diff])
+        rows.append({"features": name, "same_video_auc": auc, "pairs": len(same)})
+    return pd.DataFrame(rows)
+
+
+def main(results: Path):
+    df, X, cols = load(results)
+    out = results / "analysis"
+    out.mkdir(exist_ok=True)
+    e1 = e1_fingerprint(df, X, cols)
+    print(e1.round(3).to_string())
+    e1.to_csv(out / "e1_fingerprint.csv", index=False)
+    return e1
+
+
+if __name__ == "__main__":
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else "results"))
