@@ -151,14 +151,68 @@ def e1_fingerprint(df, X, cols, n_pairs=200_000):
     return pd.DataFrame(rows)
 
 
-def main(results: Path):
+def fit_predict(Xtr, ytr, Xte):
+    m = RidgeCV(alphas=np.logspace(0, 5, 11)).fit(Xtr, ytr)
+    return m.predict(Xte)
+
+
+def e2_e3(df, X, cols, n_perm=0):
+    """Seen-vs-unseen rating decoding (E2) and individual-deviation decoding (E3)."""
+    pf, tf = folds(df)
+    groups = df.participant_id.to_numpy()
+    rows = []
+    for target in TARGETS:
+        y = df[target].to_numpy(float)
+        for name, mods in SETS.items():
+            Xm = X[:, col_index(cols, mods)]
+            pred = {k: np.full(len(df), np.nan) for k in ("seen", "unseen", "dev_seen", "dev_unseen",
+                                                          "video_mean_seen")}
+            dev_true = {"dev_seen": np.full(len(df), np.nan), "dev_unseen": np.full(len(df), np.nan)}
+            for k in range(5):
+                train = (pf != k) & (tf != k)
+                seen, unseen = (pf == k) & (tf != k), (pf == k) & (tf == k)
+                p = fit_predict(Xm[train], y[train], Xm[seen | unseen])
+                pred["seen"][seen | unseen] = p
+                d = video_deviation(df, y, train)
+                ok = train & np.isfinite(d)
+                pd_ = fit_predict(Xm[ok], d[ok], Xm[seen | unseen])
+                for key, m in (("dev_seen", seen), ("dev_unseen", unseen)):
+                    pred[key][m] = pd_[m[seen | unseen]]
+                    dev_true[key][m] = d[m]
+                vm = pd.Series(y[train]).groupby(df.video.to_numpy()[train]).mean()
+                pred["video_mean_seen"][seen] = df.video[seen].map(vm).to_numpy()
+            seen_all, unseen_all = tf != pf, tf == pf
+            res = {
+                "target": target, "features": name,
+                "r_seen_videos": within_r(y[seen_all], pred["seen"][seen_all], groups[seen_all]),
+                "r_unseen_videos": within_r(y[unseen_all], pred["seen"][unseen_all], groups[unseen_all]),
+            }
+            for key, m in (("dev_seen", seen_all), ("dev_unseen", unseen_all)):
+                ok = m & np.isfinite(dev_true[key])
+                res[f"r_{key}"] = within_r(dev_true[key][ok], pred[key][ok], groups[ok])
+                if n_perm:
+                    vids = df.video.to_numpy()[ok]
+                    null = [within_r(shuffle_within(dev_true[key][ok], vids), pred[key][ok], groups[ok])
+                            for _ in range(n_perm)]
+                    res[f"p_{key}"] = (1 + np.sum(np.array(null) >= res[f"r_{key}"])) / (n_perm + 1)
+            if name == "All":
+                ok = seen_all & np.isfinite(pred["video_mean_seen"])
+                res["r_video_mean_baseline"] = within_r(y[ok], pred["video_mean_seen"][ok], groups[ok])
+            rows.append(res)
+            print({k: (round(v, 3) if isinstance(v, float) else v) for k, v in res.items()}, flush=True)
+    return pd.DataFrame(rows)
+
+
+def main(results: Path, n_perm=200):
     df, X, cols = load(results)
     out = results / "analysis"
     out.mkdir(exist_ok=True)
     e1 = e1_fingerprint(df, X, cols)
     print(e1.round(3).to_string())
     e1.to_csv(out / "e1_fingerprint.csv", index=False)
-    return e1
+    e23 = e2_e3(df, X, cols, n_perm=n_perm)
+    e23.to_csv(out / "e2_e3_decoding.csv", index=False)
+    return e1, e23
 
 
 if __name__ == "__main__":
