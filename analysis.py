@@ -241,6 +241,23 @@ def e2_e3(df, X, cols, n_perm=0, sets=SETS, model="ridge"):
     return pd.DataFrame(rows)
 
 
+def robustness(results: Path):
+    """Same E2/E3 scores (all signals, ridge) per cohort and with flagged trials kept."""
+    rows = []
+    for flagged in (False, True):
+        df, X, cols = load(results, include_flagged=flagged)
+        subsets = {"all cohorts": np.ones(len(df), bool)}
+        if not flagged:
+            subsets.update({f"cohort {c}": (df.cohort == c).to_numpy() for c in sorted(df.cohort.unique())})
+        for name, m in subsets.items():
+            if df[m].participant_id.nunique() < 25:
+                continue
+            r = e2_e3(df[m].reset_index(drop=True), X[m], cols, sets=["All"])
+            rows.append(r.assign(subset=name + (" + flagged" if flagged else ""),
+                                 n_trials=int(m.sum()), n_people=df[m].participant_id.nunique()))
+    return pd.concat(rows)
+
+
 def holm(p):
     """Holm-Bonferroni adjusted p-values."""
     p = np.asarray(p, float)
@@ -262,8 +279,10 @@ def figures(e1, e23, out: Path):
     d = e1.set_index("features").loc[names[::-1]]
     ax.barh(d.index, d.same_video_auc - 0.5, left=0.5, color=BLUE, height=0.55)
     ax.axvline(0.5, color=GRAY, lw=1, ls="--")
+    pad = 0.02 * (d.same_video_auc.max() - 0.5)
     for y, v in enumerate(d.same_video_auc):
-        ax.text(max(v, 0.5) + 0.004, y, f"{v:.2f}", va="center", color="#52514e")
+        ax.text(max(v, 0.5) + pad, y, f"{v:.3f}", va="center", color="#52514e")
+    ax.set_xlim(0.5, 0.5 + 1.15 * (d.same_video_auc.max() - 0.5))
     ax.set_xlabel("same-video AUC (0.5 = no fingerprint)")
     ax.set_title("E1  Do two people's signals match\nwhen they watch the same video?", loc="left", fontsize=9)
     fig.tight_layout()
@@ -290,9 +309,9 @@ def figures(e1, e23, out: Path):
             ax.set_xticks(x, names, rotation=0)
             ax.set_title(target.replace("rating_", ""), loc="left", fontsize=9)
         axes[0].set_ylabel("within-person r")
-        axes[1].legend(frameon=False, loc="upper right")
+        fig.legend(*axes[0].get_legend_handles_labels(), frameon=False, ncol=2, loc="lower center")
         fig.suptitle(title + ("  (* Holm p < .05)" if "dev" in cols[0] else ""), x=0.01, ha="left", fontsize=9)
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0.06, 1, 0.97))
         fig.savefig(out / fig_name, dpi=200)
     plt.close("all")
 
