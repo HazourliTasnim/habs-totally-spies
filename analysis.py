@@ -50,7 +50,7 @@ def load(results: Path, include_flagged=False):
     # A start marker is unique per person; the labels' day column is unreliable
     # in cohort 4, so the recording day comes from the feature file.
     labels = labels.drop(columns="day").drop_duplicates(["participant_id", "start_marker"], keep=False)
-    feats["cov_row"] = np.arange(len(feats))                                       # row in eeg_cov.npy
+    feats = feats.assign(cov_row=np.arange(len(feats)))                            # row in eeg_cov.npy
     feats = feats.drop_duplicates(["participant_id", "start_marker"], keep=False)   # P475: unlabelled anyway
     df = feats.merge(labels, on=["participant_id", "start_marker"], how="inner", validate="1:1")
     print(f"{len(feats)} feature rows, {len(df)} matched to labels "
