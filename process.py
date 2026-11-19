@@ -69,7 +69,7 @@ def session_trials(bdf, markers):
     rows, covs, log = [], [], {"missing_marker": [], "repeated_marker": [], "out_of_range": []}
     for m in markers:
         hits = onsets.get(str(int(m)), [])
-        if not hits:
+        if not hits:                                  # usually a trial from another day
             log["missing_marker"].append(int(m))
             continue
         if len(hits) > 1:
@@ -132,7 +132,9 @@ def process(data_dir: Path, out_dir: Path) -> None:
         if (pid, str(day)) in skip:
             continue
         if labels is not None:
-            m = labels[(labels.participant_id == pid) & (labels.day == day)]
+            # Match on participant only: in cohort 4 the labels' day column does
+            # not match the recording day, but a start marker is unique per person.
+            m = labels[labels.participant_id == pid]
             markers = sorted(m.start_marker.dropna().astype(int).unique())
         else:
             markers = []

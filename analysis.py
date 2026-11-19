@@ -47,8 +47,10 @@ def load(results: Path, include_flagged=False):
     feats = pd.read_csv(results / "features.csv.gz")
     labels = pd.read_csv(results / "labels_train.csv", na_values=["TESTSUBJECT"], low_memory=False)
     labels["day"] = pd.to_numeric(labels.day.astype(str).str.extract(r"(\d+)")[0], errors="coerce")
-    labels = labels.drop_duplicates(["participant_id", "day", "start_marker"], keep=False)
-    df = feats.merge(labels, on=["participant_id", "day", "start_marker"], how="inner", validate="1:1")
+    # A start marker is unique per person; the labels' day column is unreliable
+    # in cohort 4, so the recording day comes from the feature file.
+    labels = labels.drop(columns="day").drop_duplicates(["participant_id", "start_marker"], keep=False)
+    df = feats.merge(labels, on=["participant_id", "start_marker"], how="inner", validate="1:1")
     print(f"{len(feats)} feature rows, {len(df)} matched to labels "
           f"({df.participant_id.nunique()} participants, {df.video.nunique()} videos)")
     df = df.dropna(subset=list(TARGETS))
