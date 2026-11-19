@@ -203,7 +203,63 @@ def e2_e3(df, X, cols, n_perm=0):
     return pd.DataFrame(rows)
 
 
-def main(results: Path, n_perm=200):
+def holm(p):
+    """Holm-Bonferroni adjusted p-values."""
+    p = np.asarray(p, float)
+    order = np.argsort(p)
+    adj = np.maximum.accumulate((len(p) - np.arange(len(p))) * p[order]).clip(max=1)
+    out = np.empty_like(adj)
+    out[order] = adj
+    return out
+
+
+def figures(e1, e23, out: Path):
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
+                         "axes.edgecolor": "#52514e", "axes.labelcolor": "#0b0b0b"})
+    BLUE, ORANGE, GRAY = "#2a78d6", "#eb6834", "#8a8984"
+    names = list(SETS)
+
+    fig, ax = plt.subplots(figsize=(4.2, 2.8))
+    d = e1.set_index("features").loc[names[::-1]]
+    ax.barh(d.index, d.same_video_auc - 0.5, left=0.5, color=BLUE, height=0.55)
+    ax.axvline(0.5, color=GRAY, lw=1, ls="--")
+    for y, v in enumerate(d.same_video_auc):
+        ax.text(max(v, 0.5) + 0.004, y, f"{v:.2f}", va="center", color="#52514e")
+    ax.set_xlabel("same-video AUC (0.5 = no fingerprint)")
+    ax.set_title("E1  Do two people's signals match\nwhen they watch the same video?", loc="left", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out / "fig1_fingerprint.png", dpi=200)
+
+    for fig_name, cols, labels, title in (
+        ("fig2_seen_vs_unseen.png", ("r_seen_videos", "r_unseen_videos"), ("seen videos", "unseen videos"),
+         "E2  Rating decoding on new people: videos seen vs never seen in training"),
+        ("fig3_individual.png", ("r_dev_seen", "r_dev_unseen"), ("seen videos", "unseen videos"),
+         "E3  Decoding how a person's rating differs from others on the same video"),
+    ):
+        fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9), sharey=True)
+        for ax, target in zip(axes, TARGETS):
+            d = e23[e23.target == target].set_index("features").loc[names]
+            x = np.arange(len(names))
+            for off, c, lab, col in ((-0.17, BLUE, labels[0], cols[0]), (0.17, ORANGE, labels[1], cols[1])):
+                ax.bar(x + off, d[col], width=0.32, color=c, label=lab)
+                q = d.get(col.replace("r_", "q_"))
+                if q is not None:
+                    for xi, (r, qi) in enumerate(zip(d[col], q)):
+                        if qi < 0.05:
+                            ax.text(xi + off, max(r, 0) + 0.004, "*", ha="center", color="#0b0b0b")
+            ax.axhline(0, color=GRAY, lw=1)
+            ax.set_xticks(x, names, rotation=0)
+            ax.set_title(target.replace("rating_", ""), loc="left", fontsize=9)
+        axes[0].set_ylabel("within-person r")
+        axes[1].legend(frameon=False, loc="upper right")
+        fig.suptitle(title + ("  (* Holm p < .05)" if "dev" in cols[0] else ""), x=0.01, ha="left", fontsize=9)
+        fig.tight_layout()
+        fig.savefig(out / fig_name, dpi=200)
+    plt.close("all")
+
+
+def main(results: Path, n_perm=1000):
     df, X, cols = load(results)
     out = results / "analysis"
     out.mkdir(exist_ok=True)
@@ -211,7 +267,11 @@ def main(results: Path, n_perm=200):
     print(e1.round(3).to_string())
     e1.to_csv(out / "e1_fingerprint.csv", index=False)
     e23 = e2_e3(df, X, cols, n_perm=n_perm)
+    if n_perm:
+        p = e23[["p_dev_seen", "p_dev_unseen"]].to_numpy().ravel()
+        e23[["q_dev_seen", "q_dev_unseen"]] = holm(p).reshape(-1, 2)
     e23.to_csv(out / "e2_e3_decoding.csv", index=False)
+    figures(e1, e23, Path("figures") if out.parent == Path("results") else out)
     return e1, e23
 
 
