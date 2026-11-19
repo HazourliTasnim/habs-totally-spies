@@ -242,19 +242,15 @@ def e2_e3(df, X, cols, n_perm=0, sets=SETS, model="ridge"):
 
 
 def robustness(results: Path):
-    """Same E2/E3 scores (all signals, ridge) per cohort and with flagged trials kept."""
+    """Same E2/E3 scores (all signals, ridge) within each cohort.
+    (No trial is flagged in this release, so flagged_outliers changes nothing.)"""
+    df, X, cols = load(results)
     rows = []
-    for flagged in (False, True):
-        df, X, cols = load(results, include_flagged=flagged)
-        subsets = {"all cohorts": np.ones(len(df), bool)}
-        if not flagged:
-            subsets.update({f"cohort {c}": (df.cohort == c).to_numpy() for c in sorted(df.cohort.unique())})
-        for name, m in subsets.items():
-            if df[m].participant_id.nunique() < 25:
-                continue
+    for c in sorted(df.cohort.unique()):
+        m = (df.cohort == c).to_numpy()
+        if df[m].participant_id.nunique() >= 25:
             r = e2_e3(df[m].reset_index(drop=True), X[m], cols, sets=["All"])
-            rows.append(r.assign(subset=name + (" + flagged" if flagged else ""),
-                                 n_trials=int(m.sum()), n_people=df[m].participant_id.nunique()))
+            rows.append(r.assign(cohort=c, n_trials=int(m.sum()), n_people=df[m].participant_id.nunique()))
     return pd.concat(rows)
 
 
@@ -328,7 +324,8 @@ def main(results: Path, n_perm=1000):
         p = e23[["p_dev_seen", "p_dev_unseen"]].to_numpy().ravel()
         e23[["q_dev_seen", "q_dev_unseen"]] = holm(p).reshape(-1, 2)
     e23.to_csv(out / "e2_e3_decoding.csv", index=False)
-    figures(e1, e23, Path("figures") if out.parent == Path("results") else out)
+    robustness(results).to_csv(out / "robustness_by_cohort.csv", index=False)
+    figures(e1, e23, Path("figures"))
     return e1, e23
 
 
