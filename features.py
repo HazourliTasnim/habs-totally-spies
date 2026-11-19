@@ -141,13 +141,21 @@ def trial_features(df, eeg_names, onset):
     eeg, cov = eeg_features(seg[eeg_names].to_numpy().T, t)
     for (w, b), v in eeg.items():
         row.update({f"eeg_{w}_{b}_{ch}": val for ch, val in zip(eeg_names, v)})
-    for prefix, feats in (
-        ("ecg", ecg_features(seg["ECG"].to_numpy(), t)),
-        ("gsr", gsr_features(seg["GSR"].to_numpy(), t)),
-        ("resp", resp_features(seg["Resp"].to_numpy(), t)),
-        ("eye", eye_features(np.nanmean(seg[["pupildiameter_le", "pupildiameter_ri"]].to_numpy(), axis=1),
-                             seg["gaze_x"].to_numpy(), seg["gaze_y"].to_numpy(), t)),
+
+    def col(*names):        # a recording can lack a sensor: NaN keeps the trial
+        cols = [n for n in names if n in seg]
+        return np.nanmean(seg[cols].to_numpy(), axis=1) if cols else np.full(len(seg), np.nan)
+
+    for prefix, fn, args in (
+        ("ecg", ecg_features, (col("ECG"),)),
+        ("gsr", gsr_features, (col("GSR"),)),
+        ("resp", resp_features, (col("Resp"),)),
+        ("eye", eye_features, (col("pupildiameter_le", "pupildiameter_ri"), col("gaze_x"), col("gaze_y"))),
     ):
+        try:
+            feats = fn(*args, t)
+        except (ValueError, np.linalg.LinAlgError):     # all-NaN or flat signal
+            feats = {}
         row.update({f"{prefix}_{k}": v for k, v in feats.items()})
     iu = np.triu_indices(len(eeg_names))
     return row, cov[:, iu[0], iu[1]].astype(np.float32)
