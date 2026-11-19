@@ -133,8 +133,9 @@ def eye_features(pupil, gx, gy, t):
 def trial_features(df, eeg_names, onset):
     """All scalar features (dict) and EEG covariances for one trial."""
     i0, i1 = int((onset + BASE[0] - PAD) * FS), int((onset + VIDEO[1] + PAD) * FS)
-    if i0 < 0 or i1 > len(df):
+    if i0 < 0 or int((onset + VIDEO[1]) * FS) > len(df):     # the whole video must be recorded
         return None, None
+    i1 = min(i1, len(df))                                       # last trial: shorter filter margin
     seg = df.iloc[i0:i1]
     t = np.arange(i1 - i0) / FS + BASE[0] - PAD
     row = {}
