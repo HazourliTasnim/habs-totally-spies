@@ -50,6 +50,7 @@ def load(results: Path, include_flagged=False):
     # A start marker is unique per person; the labels' day column is unreliable
     # in cohort 4, so the recording day comes from the feature file.
     labels = labels.drop(columns="day").drop_duplicates(["participant_id", "start_marker"], keep=False)
+    feats["cov_row"] = np.arange(len(feats))                                       # row in eeg_cov.npy
     feats = feats.drop_duplicates(["participant_id", "start_marker"], keep=False)   # P475: unlabelled anyway
     df = feats.merge(labels, on=["participant_id", "start_marker"], how="inner", validate="1:1")
     print(f"{len(feats)} feature rows, {len(df)} matched to labels "
@@ -80,6 +81,34 @@ def load(results: Path, include_flagged=False):
     iqr = g.transform(lambda s: s.quantile(0.75) - s.quantile(0.25))
     X = ((X - med) / iqr.replace(0, np.nan)).clip(-5, 5).fillna(0)
     return df, X.to_numpy(np.float32), cols
+
+
+def riemann_features(results: Path, df):
+    """EEG covariances (theta, alpha, beta) mapped to the tangent space at each
+    session's own mean covariance: a standard cross-subject EEG representation.
+    Recentring per session uses no labels."""
+    tri = np.load(results / "eeg_cov.npy", mmap_mode="r")
+    n = int((np.sqrt(8 * tri.shape[2] + 1) - 1) / 2)
+    iu = np.triu_indices(n)
+    w = np.where(iu[0] == iu[1], 1.0, np.sqrt(2))                 # keeps the Frobenius norm
+    sess = (df.participant_id + "_" + df.day.astype(str)).to_numpy()
+    out = np.zeros((len(df), tri.shape[1] * len(iu[0])), np.float32)
+
+    def powm(C, f):
+        e, V = np.linalg.eigh(C)
+        return (V * f(e)[..., None, :]) @ np.swapaxes(V, -1, -2)
+
+    for s in np.unique(sess):
+        rows = np.flatnonzero(sess == s)
+        for b in range(tri.shape[1]):
+            C = np.zeros((len(rows), n, n))
+            C[:, iu[0], iu[1]] = tri[df.cov_row.to_numpy()[rows], b]
+            C = C + np.triu(C, 1).swapaxes(1, 2)
+            C = C / np.trace(C, axis1=1, axis2=2)[:, None, None] + 1e-5 * np.eye(n)   # scale-free, regularised
+            ref = powm(np.mean(C, axis=0), lambda e: e ** -0.5)
+            T = powm(ref @ C @ ref, np.log)
+            out[rows, b * len(iu[0]):(b + 1) * len(iu[0])] = T[:, iu[0], iu[1]] * w
+    return out
 
 
 def col_index(cols, mods):
@@ -154,31 +183,37 @@ def e1_fingerprint(df, X, cols, n_pairs=200_000):
     return pd.DataFrame(rows)
 
 
-def fit_predict(Xtr, ytr, Xte):
-    m = RidgeCV(alphas=np.logspace(0, 5, 11)).fit(Xtr, ytr)
-    return m.predict(Xte)
+def fit_predict(Xtr, ytr, Xte, model="ridge"):
+    """Ridge (main model) or gradient-boosted trees (nonlinear check)."""
+    if model == "trees":
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        m = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_leaf_nodes=15,
+                                          l2_regularization=1.0, random_state=0)
+    else:
+        m = RidgeCV(alphas=np.logspace(0, 5, 11))
+    return m.fit(Xtr, ytr).predict(Xte)
 
 
-def e2_e3(df, X, cols, n_perm=0):
+def e2_e3(df, X, cols, n_perm=0, sets=SETS, model="ridge"):
     """Seen-vs-unseen rating decoding (E2) and individual-deviation decoding (E3)."""
     pf, tf = folds(df)
     groups = df.participant_id.to_numpy()
     rows = []
     for target in TARGETS:
         y = df[target].to_numpy(float)
-        for name, mods in SETS.items():
-            Xm = X[:, col_index(cols, mods)]
+        for name in sets:
+            Xm = X[:, col_index(cols, SETS[name])]
             pred = {k: np.full(len(df), np.nan) for k in ("seen", "unseen", "dev_seen", "dev_unseen",
                                                           "video_mean_seen")}
             dev_true = {"dev_seen": np.full(len(df), np.nan), "dev_unseen": np.full(len(df), np.nan)}
             for k in range(5):
                 train = (pf != k) & (tf != k)
                 seen, unseen = (pf == k) & (tf != k), (pf == k) & (tf == k)
-                p = fit_predict(Xm[train], y[train], Xm[seen | unseen])
+                p = fit_predict(Xm[train], y[train], Xm[seen | unseen], model)
                 pred["seen"][seen | unseen] = p
                 d = video_deviation(df, y, train)
                 ok = train & np.isfinite(d)
-                pd_ = fit_predict(Xm[ok], d[ok], Xm[seen | unseen])
+                pd_ = fit_predict(Xm[ok], d[ok], Xm[seen | unseen], model)
                 for key, m in (("dev_seen", seen), ("dev_unseen", unseen)):
                     pred[key][m] = pd_[m[seen | unseen]]
                     dev_true[key][m] = d[m]
@@ -186,7 +221,7 @@ def e2_e3(df, X, cols, n_perm=0):
                 pred["video_mean_seen"][seen] = df.video[seen].map(vm).to_numpy()
             seen_all, unseen_all = tf != pf, tf == pf
             res = {
-                "target": target, "features": name,
+                "target": target, "features": name, "model": model,
                 "r_seen_videos": within_r(y[seen_all], pred["seen"][seen_all], groups[seen_all]),
                 "r_unseen_videos": within_r(y[unseen_all], pred["seen"][unseen_all], groups[unseen_all]),
             }
