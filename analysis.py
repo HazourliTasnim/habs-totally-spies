@@ -301,7 +301,7 @@ def holm(p):
     return out
 
 
-def figures(e1, e23, out: Path):
+def figures(e1, e23, out: Path, e4=None):
     import matplotlib.pyplot as plt
     plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
                          "axes.edgecolor": "#52514e", "axes.labelcolor": "#0b0b0b"})
@@ -346,6 +346,25 @@ def figures(e1, e23, out: Path):
         fig.suptitle(title + ("  (* Holm p < .05)" if "dev" in cols[0] else ""), x=0.01, ha="left", fontsize=9)
         fig.tight_layout(rect=(0, 0.06, 1, 0.97))
         fig.savefig(out / fig_name, dpi=200)
+    if e4 is not None:
+        fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.7), sharey=True)
+        for ax, target in zip(axes, TARGETS):
+            d = e4[e4.target == target].set_index("features").loc[names]
+            x = np.arange(len(names))
+            ax.bar(x, d.r_sync, width=0.55, color=BLUE, label="observed")
+            ax.scatter(x, d.null_mean, marker="_", s=260, color="#0b0b0b", zorder=3, label="expected by chance")
+            for xi, (r, q) in enumerate(zip(d.r_sync, d.q_sync)):
+                if q < 0.05:
+                    ax.text(xi, max(r, 0) + 0.002, "*", ha="center")
+            ax.axhline(0, color=GRAY, lw=1)
+            ax.set_xticks(x, names)
+            ax.set_title(target.replace("rating_", ""), loc="left", fontsize=9)
+        axes[0].set_ylabel("within-person r")
+        fig.legend(*axes[0].get_legend_handles_labels(), frameon=False, ncol=2, loc="lower center")
+        fig.suptitle("E4  Do people who react unlike the crowd also rate unlike the crowd?", x=0.01, ha="left",
+                     fontsize=9)
+        fig.tight_layout(rect=(0, 0.06, 1, 0.97))
+        fig.savefig(out / "fig4_synchrony.png", dpi=200)
     plt.close("all")
 
 
@@ -361,9 +380,11 @@ def main(results: Path, n_perm=1000):
         p = e23[["p_dev_seen", "p_dev_unseen"]].to_numpy().ravel()
         e23[["q_dev_seen", "q_dev_unseen"]] = holm(p).reshape(-1, 2)
     e23.to_csv(out / "e2_e3_decoding.csv", index=False)
+    e4 = e4_synchrony(df, X, cols, n_perm=n_perm)
+    e4.to_csv(out / "e4_synchrony.csv", index=False)
     robustness(results).to_csv(out / "robustness_by_cohort.csv", index=False)
-    figures(e1, e23, Path("figures"))
-    return e1, e23
+    figures(e1, e23, Path("figures"), e4)
+    return e1, e23, e4
 
 
 if __name__ == "__main__":
