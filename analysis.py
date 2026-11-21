@@ -1,10 +1,10 @@
 """Do brain and body signals show how each person feels, or which video they watched?
 
-Runs locally on the tables written by process.py (downloaded with `habs get`):
+Runs locally on the tables written by process.py:
 
-    python analysis.py results/          # writes results/*.csv and figures/
+    python analysis.py results/          # tables and figures in results/analysis/
 
-Three experiments, every one evaluated on participants never seen in training:
+Four experiments; the models (E2, E3) are always tested on unseen participants:
 
 E1  Stimulus fingerprint (model-free). For pairs of trials from *different*
     people, are physiological responses more similar when both watched the same
@@ -20,9 +20,12 @@ E3  The individual component. Target = how far a person's rating of a video
     deviates from everyone else's rating of that same video. Predicting it on
     unseen people (and unseen themes) requires reading the person, not the video.
 
+E4  Synchrony with the crowd (model-free). Do people whose response is far from
+    the other viewers' response to the same video also rate it far from them?
+
 Score: correlation between prediction and rating computed *within* each test
 participant (removes personal scale use), Fisher-averaged over participants.
-E3 chance level: deviations are shuffled among people who watched the *same
+E3/E4 chance level: deviations are shuffled among people who watched the *same
 video*, which keeps everything tied to the video (including rating-scale
 ceiling effects) and destroys only who-felt-what.
 """
