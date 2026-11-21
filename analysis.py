@@ -50,7 +50,7 @@ def load(results: Path, include_flagged=False):
     # A start marker is unique per person; the labels' day column is unreliable
     # in cohort 4, so the recording day comes from the feature file.
     labels = labels.drop(columns="day").drop_duplicates(["participant_id", "start_marker"], keep=False)
-    feats = feats.assign(cov_row=np.arange(len(feats)))                            # row in eeg_cov.npy
+    feats = feats.copy().assign(cov_row=np.arange(len(feats)))                     # row in eeg_cov.npy
     feats = feats.drop_duplicates(["participant_id", "start_marker"], keep=False)   # P475: unlabelled anyway
     df = feats.merge(labels, on=["participant_id", "start_marker"], how="inner", validate="1:1")
     print(f"{len(feats)} feature rows, {len(df)} matched to labels "
@@ -181,6 +181,43 @@ def e1_fingerprint(df, X, cols, n_pairs=200_000):
         auc = roc_auc_score(np.r_[np.ones(len(same)), np.zeros(len(diff))], np.r_[same, diff])
         rows.append({"features": name, "same_video_auc": auc, "pairs": len(same)})
     return pd.DataFrame(rows)
+
+
+def e4_synchrony(df, X, cols, n_perm=1000, min_viewers=5):
+    """Does reacting like the crowd go with feeling like the crowd?
+
+    For each trial: how far the person's response is from the average response
+    of the other viewers of the same video (RMS distance of session-normalised
+    features, log), and how far their rating is from the other viewers' mean
+    rating (absolute). Score: within-person correlation of the two. Null:
+    shuffle rating distances among viewers of the same video (keeps any
+    video-level link, e.g. polarising videos), Holm-corrected afterwards.
+    No model is trained, so nothing can leak."""
+    vid, groups = df.video.to_numpy(), df.participant_id.to_numpy()
+    n = pd.Series(vid).map(pd.Series(vid).value_counts()).to_numpy()
+    ok = n >= min_viewers
+    rows = []
+
+    def loo(a):                                    # mean of the other viewers of the same video
+        g = pd.DataFrame(a).groupby(vid)
+        return (g.transform("sum").to_numpy() - a) / (n[:, None] - 1)
+
+    for target in TARGETS:
+        y = df[target].to_numpy(float)
+        rating_gap = np.abs(y - loo(y[:, None])[:, 0])
+        for name, mods in SETS.items():
+            Z = X[:, col_index(cols, mods)].astype(float)
+            react_gap = np.log(np.sqrt(((Z - loo(Z)) ** 2).mean(axis=1)) + 1e-6)
+            r = within_r(rating_gap[ok], react_gap[ok], groups[ok])
+            null = [within_r(shuffle_within(rating_gap[ok], vid[ok]), react_gap[ok], groups[ok])
+                    for _ in range(n_perm)]
+            rows.append({"target": target, "features": name, "r_sync": r,
+                         "p_sync": (1 + np.sum(np.array(null) >= r)) / (n_perm + 1),
+                         "null_mean": float(np.mean(null)), "trials": int(ok.sum())})
+            print(rows[-1], flush=True)
+    out = pd.DataFrame(rows)
+    out["q_sync"] = holm(out.p_sync)
+    return out
 
 
 def fit_predict(Xtr, ytr, Xte, model="ridge"):
