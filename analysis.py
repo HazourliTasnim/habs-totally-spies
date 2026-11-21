@@ -383,7 +383,7 @@ def main(results: Path, n_perm=1000):
     e4 = e4_synchrony(df, X, cols, n_perm=n_perm)
     e4.to_csv(out / "e4_synchrony.csv", index=False)
     robustness(results).to_csv(out / "robustness_by_cohort.csv", index=False)
-    figures(e1, e23, Path("figures"), e4)
+    figures(e1, e23, out, e4)                    # the committed copies live in figures/
     return e1, e23, e4
 
 
